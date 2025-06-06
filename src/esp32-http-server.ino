@@ -9,14 +9,17 @@
 
 WebServer server(80);
 
-// LED pins
 const int RED_LED = 26;
 const int YELLOW_LED = 27;
 const int GREEN_LED = 25;
 
 unsigned long previousMillis = 0;
-int interval = 3000;  // default 3 seconds
-int currentLED = 0;   // 0 = red, 1 = green, 2 = yellow
+int currentLED = 0; // 0 = red, 1 = green, 2 = yellow
+
+// Default durations (in milliseconds)
+int redDuration = 3000;
+int greenDuration = 3000;
+int yellowDuration = 3000;
 
 void switchLED() {
   digitalWrite(RED_LED, LOW);
@@ -27,14 +30,17 @@ void switchLED() {
     case 0:
       digitalWrite(RED_LED, HIGH);
       currentLED = 1;
+      previousMillis = millis();
       break;
     case 1:
       digitalWrite(GREEN_LED, HIGH);
       currentLED = 2;
+      previousMillis = millis();
       break;
     case 2:
       digitalWrite(YELLOW_LED, HIGH);
       currentLED = 0;
+      previousMillis = millis();
       break;
   }
 }
@@ -48,39 +54,58 @@ void handleRoot() {
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <style>
         body { font-family: Arial; text-align: center; margin-top: 50px; }
-        input[type=number] { padding: 10px; font-size: 1.2em; }
-        input[type=submit] { padding: 10px 20px; font-size: 1.2em; background: #28a745; color: white; border: none; }
+        input[type=number] { padding: 10px; font-size: 1.2em; width: 80px; }
+        input[type=submit] { padding: 10px 20px; font-size: 1.2em; background: #28a745; color: white; border: none; margin-top: 10px; }
         .info { margin-top: 20px; font-size: 1.2em; }
       </style>
     </head>
     <body>
       <h1>ESP32 Traffic Light Control</h1>
-      <form action="/setInterval" method="GET">
-        <label for="seconds">Set interval (seconds):</label><br><br>
-        <input type="number" id="seconds" name="seconds" min="1" required>
-        <input type="submit" value="Update Interval">
+      <form action="/setDurations" method="GET">
+        <label>Red (sec): <input type="number" name="red" min="1" required value="REDVAL"></label><br><br>
+        <label>Green (sec): <input type="number" name="green" min="1" required value="GREENVAL"></label><br><br>
+        <label>Yellow (sec): <input type="number" name="yellow" min="1" required value="YELLOWVAL"></label><br><br>
+        <input type="submit" value="Update Durations">
       </form>
-      <div class="info">Current interval: INTERVAL seconds</div>
+      <div class="info">
+        Current - Red: REDDUR s | Green: GREENDUR s | Yellow: YELLOWDUR s
+      </div>
     </body>
     </html>
   )";
 
-  html.replace("INTERVAL", String(interval / 1000));
+  html.replace("REDVAL", String(redDuration / 1000));
+  html.replace("GREENVAL", String(greenDuration / 1000));
+  html.replace("YELLOWVAL", String(yellowDuration / 1000));
+
+  html.replace("REDDUR", String(redDuration / 1000));
+  html.replace("GREENDUR", String(greenDuration / 1000));
+  html.replace("YELLOWDUR", String(yellowDuration / 1000));
+
   server.send(200, "text/html", html);
 }
 
-void handleSetInterval() {
-  if (server.hasArg("seconds")) {
-    int sec = server.arg("seconds").toInt();
-    if (sec > 0) {
-      interval = sec * 1000;
-      Serial.print("Updated interval to: ");
-      Serial.print(sec);
-      Serial.println(" seconds");
-    }
+void handleSetDurations() {
+  if (server.hasArg("red")) {
+    int val = server.arg("red").toInt();
+    if (val > 0) redDuration = val * 1000;
   }
+  if (server.hasArg("green")) {
+    int val = server.arg("green").toInt();
+    if (val > 0) greenDuration = val * 1000;
+  }
+  if (server.hasArg("yellow")) {
+    int val = server.arg("yellow").toInt();
+    if (val > 0) yellowDuration = val * 1000;
+  }
+
+  Serial.println("Updated durations:");
+  Serial.print("Red: "); Serial.println(redDuration);
+  Serial.print("Green: "); Serial.println(greenDuration);
+  Serial.print("Yellow: "); Serial.println(yellowDuration);
+
   server.sendHeader("Location", "/");
-  server.send(303);  // redirect
+  server.send(303); // redirect
 }
 
 void setup(void) {
@@ -93,7 +118,6 @@ void setup(void) {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD, WIFI_CHANNEL);
   Serial.print("Connecting to WiFi ");
   Serial.print(WIFI_SSID);
-
   while (WiFi.status() != WL_CONNECTED) {
     delay(100);
     Serial.print(".");
@@ -104,20 +128,27 @@ void setup(void) {
   Serial.println(WiFi.localIP());
 
   server.on("/", handleRoot);
-  server.on("/setInterval", handleSetInterval);
+  server.on("/setDurations", handleSetDurations);
 
   server.begin();
   Serial.println("HTTP server started (http://localhost:8180)");
+
+  switchLED(); // Turn on the first light
 }
 
 void loop(void) {
   server.handleClient();
 
   unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= interval) {
-    previousMillis = currentMillis;
-    switchLED();
+  int currentDuration = 0;
+
+  switch (currentLED) {
+    case 0: currentDuration = redDuration; break;
+    case 1: currentDuration = greenDuration; break;
+    case 2: currentDuration = yellowDuration; break;
   }
 
-  //delay(2); // small delay to yield CPU
+  if (currentMillis - previousMillis >= currentDuration) {
+    switchLED();
+  }
 }
