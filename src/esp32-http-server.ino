@@ -1,7 +1,6 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WebServer.h>
-#include <uri/UriBraces.h>
 
 #define WIFI_SSID "Wokwi-GUEST"
 #define WIFI_PASSWORD ""
@@ -16,10 +15,63 @@ const int GREEN_LED = 25;
 unsigned long previousMillis = 0;
 int currentLED = 0; // 0 = red, 1 = green, 2 = yellow
 
-// Default durations (in milliseconds)
+// Параметри алгоритму Вебстера
+const float L = 5.0; // втрати часу (сек)
+float qi[2] = {400.0, 600.0}; // інтенсивність трафіку для фаз (машин/год)
+float si[2] = {1800.0, 1800.0}; // пропускна здатність (машин/год)
+
 int redDuration = 3000;
 int greenDuration = 3000;
 int yellowDuration = 3000;
+
+void calculateWebsterDurations() {
+  float Yi[2];
+  Yi[0] = qi[0] / si[0];
+  Yi[1] = qi[1] / si[1];
+  float Y = Yi[0] + Yi[1];
+
+  // захист від ділення на нуль чи Y>=1
+  if (Y >= 1.0) {
+    Serial.println("Y >= 1. Не можна обчислити цикл. Використовується мінімальний цикл.");
+    greenDuration = 5000;
+    redDuration = 5000;
+    yellowDuration = 3000;
+    return;
+  }
+
+  float C = (1.5 * L + 5.0) / (1.0 - Y);
+  float gi1 = (Yi[0] / Y) * (C - L);
+  float gi2 = (Yi[1] / Y) * (C - L);
+
+  greenDuration = (int)(gi1 * 1000);
+  redDuration = (int)(gi2 * 1000);
+  yellowDuration = 3000; // фіксовано
+
+  Serial.println("Webster Algorithm Updated:");
+  Serial.print("q1: "); Serial.println(qi[0]);
+  Serial.print("s1: "); Serial.println(si[0]);
+  Serial.print("q2: "); Serial.println(qi[1]);
+  Serial.print("s2: "); Serial.println(si[1]);
+  Serial.print("Green Duration: "); Serial.println(greenDuration);
+  Serial.print("Red Duration: "); Serial.println(redDuration);
+}
+
+// REST API для введення трафіку
+void handleSetTrafficData() {
+  if (server.hasArg("q1")) qi[0] = server.arg("q1").toFloat();
+  if (server.hasArg("s1")) si[0] = server.arg("s1").toFloat();
+  if (server.hasArg("q2")) qi[1] = server.arg("q2").toFloat();
+  if (server.hasArg("s2")) si[1] = server.arg("s2").toFloat();
+
+  calculateWebsterDurations();
+
+  String response = "Traffic data updated:\n";
+  response += "q1=" + String(qi[0]) + " s1=" + String(si[0]) + "\n";
+  response += "q2=" + String(qi[1]) + " s2=" + String(si[1]) + "\n";
+  response += "New greenDuration=" + String(greenDuration/1000.0) + "s, redDuration=" + String(redDuration/1000.0) + "s";
+
+  server.send(200, "text/plain", response);
+}
 
 void switchLED() {
   digitalWrite(RED_LED, LOW);
@@ -45,69 +97,6 @@ void switchLED() {
   }
 }
 
-void handleRoot() {
-  String html = R"(
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Traffic Light</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <style>
-        body { font-family: Arial; text-align: center; margin-top: 50px; }
-        input[type=number] { padding: 10px; font-size: 1.2em; width: 80px; }
-        input[type=submit] { padding: 10px 20px; font-size: 1.2em; background: #28a745; color: white; border: none; margin-top: 10px; }
-        .info { margin-top: 20px; font-size: 1.2em; }
-      </style>
-    </head>
-    <body>
-      <h1>ESP32 Traffic Light Control</h1>
-      <form action="/setDurations" method="GET">
-        <label>Red (sec): <input type="number" name="red" min="1" required value="REDVAL"></label><br><br>
-        <label>Green (sec): <input type="number" name="green" min="1" required value="GREENVAL"></label><br><br>
-        <label>Yellow (sec): <input type="number" name="yellow" min="1" required value="YELLOWVAL"></label><br><br>
-        <input type="submit" value="Update Durations">
-      </form>
-      <div class="info">
-        Current - Red: REDDUR s | Green: GREENDUR s | Yellow: YELLOWDUR s
-      </div>
-    </body>
-    </html>
-  )";
-
-  html.replace("REDVAL", String(redDuration / 1000));
-  html.replace("GREENVAL", String(greenDuration / 1000));
-  html.replace("YELLOWVAL", String(yellowDuration / 1000));
-
-  html.replace("REDDUR", String(redDuration / 1000));
-  html.replace("GREENDUR", String(greenDuration / 1000));
-  html.replace("YELLOWDUR", String(yellowDuration / 1000));
-
-  server.send(200, "text/html", html);
-}
-
-void handleSetDurations() {
-  if (server.hasArg("red")) {
-    int val = server.arg("red").toInt();
-    if (val > 0) redDuration = val * 1000;
-  }
-  if (server.hasArg("green")) {
-    int val = server.arg("green").toInt();
-    if (val > 0) greenDuration = val * 1000;
-  }
-  if (server.hasArg("yellow")) {
-    int val = server.arg("yellow").toInt();
-    if (val > 0) yellowDuration = val * 1000;
-  }
-
-  Serial.println("Updated durations:");
-  Serial.print("Red: "); Serial.println(redDuration);
-  Serial.print("Green: "); Serial.println(greenDuration);
-  Serial.print("Yellow: "); Serial.println(yellowDuration);
-
-  server.sendHeader("Location", "/");
-  server.send(303); // redirect
-}
-
 void setup(void) {
   Serial.begin(115200);
 
@@ -127,13 +116,13 @@ void setup(void) {
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 
-  server.on("/", handleRoot);
-  server.on("/setDurations", handleSetDurations);
+  calculateWebsterDurations();
 
+  server.on("/setTrafficData", handleSetTrafficData);
   server.begin();
-  Serial.println("HTTP server started (http://localhost:8180)");
+  Serial.println("HTTP server started");
 
-  switchLED(); // Turn on the first light
+  switchLED();
 }
 
 void loop(void) {
